@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "ImageGenPiper Bridge",
+  "version": "0.1.0",
+  "description": "Chrome Extension Bridge for Gemini Web Image Generation",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*/*"
+      ],
+      "js": [
+        "content/content_bundle.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
