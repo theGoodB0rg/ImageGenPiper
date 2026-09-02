@@ -70,6 +70,15 @@ const SELECTOR_MAP = {
     'button:has(mat-icon[fonticon*="add" i])'
   ],
 
+  responseTurn: [
+    'model-response',
+    '[data-test-id="conversation-turn"]:has(model-response)',
+    '[data-test-id="conversation-turn"]',
+    'response-container',
+    'div[role="listitem"]',
+    'main article'
+  ],
+
   conversationContainer: [
     '[data-test-id="conversation-turn"]',
     '[data-test-id="chat-history"]',
@@ -324,7 +333,8 @@ async function clickSubmitButton() {
 
   // --- Observer ---
   /**
- * MutationObserver for tracking Gemini generation state and image extraction.
+ * MutationObserver for tracking Gemini generation state and image extraction
+ * with Turn-Scoped isolation for multi-turn conversational consistency.
  */
 
 
@@ -352,17 +362,17 @@ function watchForImageGeneration({
   const processedImages = new Set();
   let imageCount = 0;
 
-  // Track existing images before prompt was submitted so we only capture NEW images
-  const initialImages = new Set(
-    Array.from(document.querySelectorAll('img')).map((img) => img.src)
+  // Snapshot existing images in DOM before this turn's prompt execution
+  const existingImages = new Set(
+    Array.from(document.querySelectorAll('img')).map((img) => img.src || img.currentSrc)
   );
 
-  onStatus?.("GENERATING", "Monitoring DOM for generated images...");
+  onStatus?.("GENERATING", "Monitoring latest conversation turn for generated image...");
 
   const observer = new MutationObserver(async (mutations) => {
     if (isDone) return;
 
-    // Check for safety blocked warnings
+    // 1. Check for safety blocked warnings
     const safetyEl = findFirstMatchingSelector(SELECTOR_MAP.safetyWarning);
     if (safetyEl && safetyEl.offsetParent !== null) {
       cleanup();
@@ -370,24 +380,37 @@ function watchForImageGeneration({
       return;
     }
 
-    // Check for new img elements
+    // 2. Identify all current images in DOM
     const currentImgs = Array.from(document.querySelectorAll('img'));
-    for (const img of currentImgs) {
-      const src = img.src;
+    
+    // Find newly appended images that were NOT in the DOM prior to this prompt
+    const candidateImgs = currentImgs.filter((img) => {
+      const src = img.src || img.currentSrc;
+      if (!src || src.startsWith("data:image/svg") || src.includes("avatar")) {
+        return false;
+      }
+      return !existingImages.has(src) && !processedImages.has(src);
+    });
+
+    for (const img of candidateImgs) {
+      const src = img.src || img.currentSrc;
       if (!src) continue;
 
-      // Filter: Must be a newly rendered image not present before prompt submission
-      if (initialImages.has(src) || processedImages.has(src)) {
-        continue;
-      }
-
-      // Check if matches Gemini image heuristics (googleusercontent or blob URL)
+      // Validate that it is a genuine Gemini generated image asset
       const isGeminiImg =
         src.includes("googleusercontent.com") ||
+        src.includes("ggpht.com") ||
         src.startsWith("blob:") ||
-        (img.alt && img.alt.toLowerCase().includes("generated"));
+        src.startsWith("data:image") ||
+        (img.alt && img.alt.toLowerCase().includes("generated")) ||
+        (img.dataset && img.dataset.testId === "generated-image");
 
-      if (isGeminiImg) {
+      // Filter out tiny icons / avatars
+      const width = img.naturalWidth || img.width || 0;
+      const height = img.naturalHeight || img.height || 0;
+      const isTooSmall = (width > 0 && width < 150) || (height > 0 && height < 150);
+
+      if (isGeminiImg && !isTooSmall) {
         processedImages.add(src);
         imageCount++;
         onStatus?.("RENDERING", `Extracting image ${imageCount}...`);
@@ -405,22 +428,19 @@ function watchForImageGeneration({
               source_url: src.startsWith("blob:") ? undefined : src
             }
           });
+
+          // Once we have extracted the newly generated image, finalize this turn cleanly
+          setTimeout(() => {
+            if (!isDone) {
+              cleanup();
+              onStatus?.("DONE", `Completed generation for prompt.`);
+            }
+          }, 1000);
+
         } catch (err) {
           console.error("[ImageGenPiper Observer] Image fetch error:", err);
         }
       }
-    }
-
-    // Check if generation completed (spinner gone and at least 1 image found)
-    const isSpinnerActive = !!findFirstMatchingSelector(SELECTOR_MAP.generatingIndicator);
-    if (!isSpinnerActive && imageCount > 0) {
-      // Delay slightly in case multi-image rendering completes
-      setTimeout(() => {
-        if (!isDone) {
-          cleanup();
-          onStatus?.("DONE", `Completed generation with ${imageCount} image(s).`);
-        }
-      }, 1500);
     }
   });
 
@@ -485,15 +505,15 @@ function sendToBridge(payload) {
 }
 
 async function handleGenerateRequest(message) {
-  const { id, prompt, reset_chat = true, sequence_index, title, timeout_ms = 120000 } = message;
-  console.log(`[ImageGenPiper Content] Processing prompt [${id}] #${sequence_index || 1} "${title || ''}": "${prompt}"`);
+  const { id, prompt, reset_chat = false, sequence_index, title, timeout_ms = 120000 } = message;
+  console.log(`[ImageGenPiper Content] Processing prompt [${id}] #${sequence_index || 1} "${title || ''}": "${prompt}" (reset_chat=${reset_chat})`);
 
   if (activeCancelFn) {
     activeCancelFn();
     activeCancelFn = null;
   }
 
-  // 1. Reset to New Chat if requested (Clean DOM isolation)
+  // 1. Reset to New Chat only if explicitly requested
   if (reset_chat) {
     sendToBridge({
       type: "STATUS_UPDATE",
@@ -504,7 +524,16 @@ async function handleGenerateRequest(message) {
     await resetToNewChat();
   }
 
-  // 2. Locate input textarea
+  // 2. Wait for any previous turn loading spinner to settle
+  let attempts = 0;
+  while (attempts < 20) {
+    const isSpinnerActive = !!findFirstMatchingSelector(SELECTOR_MAP.generatingIndicator);
+    if (!isSpinnerActive) break;
+    await new Promise((r) => setTimeout(r, 500));
+    attempts++;
+  }
+
+  // 3. Locate input textarea
   sendToBridge({
     type: "STATUS_UPDATE",
     id,
@@ -514,7 +543,6 @@ async function handleGenerateRequest(message) {
 
   let textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
   if (!textarea) {
-    // Retry once after brief wait in case SPA is rendering
     await new Promise((r) => setTimeout(r, 1000));
     textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
   }
@@ -532,14 +560,7 @@ async function handleGenerateRequest(message) {
   }
 
   try {
-    // 3. Type prompt and submit
-    await simulateTyping(textarea, prompt);
-    const submitted = await clickSubmitButton();
-    if (!submitted) {
-      throw new Error("Failed to submit prompt (Send button not found).");
-    }
-
-    // 4. Watch for generated image
+    // 4. Attach observer BEFORE clicking submit to catch the earliest render events
     activeCancelFn = watchForImageGeneration({
       id,
       timeoutMs: timeout_ms,
@@ -567,6 +588,13 @@ async function handleGenerateRequest(message) {
         });
       }
     });
+
+    // 5. Type prompt and submit
+    await simulateTyping(textarea, prompt);
+    const submitted = await clickSubmitButton();
+    if (!submitted) {
+      throw new Error("Failed to submit prompt (Send button not found).");
+    }
 
   } catch (err) {
     console.error("[ImageGenPiper Content] Error during generation execution:", err);

@@ -26,15 +26,15 @@ function sendToBridge(payload) {
 }
 
 async function handleGenerateRequest(message) {
-  const { id, prompt, reset_chat = true, sequence_index, title, timeout_ms = 120000 } = message;
-  console.log(`[ImageGenPiper Content] Processing prompt [${id}] #${sequence_index || 1} "${title || ''}": "${prompt}"`);
+  const { id, prompt, reset_chat = false, sequence_index, title, timeout_ms = 120000 } = message;
+  console.log(`[ImageGenPiper Content] Processing prompt [${id}] #${sequence_index || 1} "${title || ''}": "${prompt}" (reset_chat=${reset_chat})`);
 
   if (activeCancelFn) {
     activeCancelFn();
     activeCancelFn = null;
   }
 
-  // 1. Reset to New Chat if requested (Clean DOM isolation)
+  // 1. Reset to New Chat only if explicitly requested
   if (reset_chat) {
     sendToBridge({
       type: "STATUS_UPDATE",
@@ -45,7 +45,16 @@ async function handleGenerateRequest(message) {
     await resetToNewChat();
   }
 
-  // 2. Locate input textarea
+  // 2. Wait for any previous turn loading spinner to settle
+  let attempts = 0;
+  while (attempts < 20) {
+    const isSpinnerActive = !!findFirstMatchingSelector(SELECTOR_MAP.generatingIndicator);
+    if (!isSpinnerActive) break;
+    await new Promise((r) => setTimeout(r, 500));
+    attempts++;
+  }
+
+  // 3. Locate input textarea
   sendToBridge({
     type: "STATUS_UPDATE",
     id,
@@ -55,7 +64,6 @@ async function handleGenerateRequest(message) {
 
   let textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
   if (!textarea) {
-    // Retry once after brief wait in case SPA is rendering
     await new Promise((r) => setTimeout(r, 1000));
     textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
   }
@@ -73,14 +81,7 @@ async function handleGenerateRequest(message) {
   }
 
   try {
-    // 3. Type prompt and submit
-    await simulateTyping(textarea, prompt);
-    const submitted = await clickSubmitButton();
-    if (!submitted) {
-      throw new Error("Failed to submit prompt (Send button not found).");
-    }
-
-    // 4. Watch for generated image
+    // 4. Attach observer BEFORE clicking submit to catch the earliest render events
     activeCancelFn = watchForImageGeneration({
       id,
       timeoutMs: timeout_ms,
@@ -108,6 +109,13 @@ async function handleGenerateRequest(message) {
         });
       }
     });
+
+    // 5. Type prompt and submit
+    await simulateTyping(textarea, prompt);
+    const submitted = await clickSubmitButton();
+    if (!submitted) {
+      throw new Error("Failed to submit prompt (Send button not found).");
+    }
 
   } catch (err) {
     console.error("[ImageGenPiper Content] Error during generation execution:", err);

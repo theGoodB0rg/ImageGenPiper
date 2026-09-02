@@ -38,7 +38,7 @@ class Orchestrator:
         concurrency: int = 1,
         max_retries: int = 3,
         timeout_ms: int = 120000,
-        reset_chat_between_prompts: bool = True,
+        reset_chat_between_prompts: bool = False,
     ):
         self.ws_server = WebSocketBridgeServer(host=ws_host, port=ws_port)
         self.job_queue = JobQueue(max_retries=max_retries)

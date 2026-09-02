@@ -43,18 +43,14 @@ def parse_prompt_file(filepath: str) -> List[Dict[str, Any]]:
                 continue
 
             if line_clean.startswith("#"):
-                # Check for titled comments like "# Image 1: The Attrition" or "# The Attrition"
                 comment_text = line_clean.lstrip("#").strip()
                 title_match = re.search(r"(?:image\s*\d+\s*:\s*)?(.+)", comment_text, re.IGNORECASE)
                 if title_match:
                     candidate = title_match.group(1).strip()
-                    # Ignore generic section headers like "Style: ..."
                     if not candidate.lower().startswith("style:") and not candidate.lower().startswith("the story:"):
                         current_title = candidate
                 continue
 
-            # Non-comment line = Prompt
-            # Extract scene title if not found from comment
             title = current_title
             if not title:
                 scene_match = re.search(r"scene\s*:\s*([^.]+)", line_clean, re.IGNORECASE)
@@ -112,6 +108,11 @@ def run(
         "-t",
         help="Timeout in seconds per prompt generation",
     ),
+    new_chat_per_prompt: bool = typer.Option(
+        False,
+        "--new-chat-per-prompt",
+        help="Reset to a new chat before each prompt (default: False, keeps persistent multi-turn thread)",
+    ),
     port: int = typer.Option(
         8765,
         "--port",
@@ -144,7 +145,8 @@ def run(
         console.print("[bold red]Error:[/bold red] No valid prompts found to process.")
         raise typer.Exit(code=1)
 
-    console.print(f"[bold cyan]Enqueued {len(prompt_items)} prompt(s)[/bold cyan] to generate into: [bold yellow]{output_dir}[/bold yellow]\n")
+    mode_desc = "Isolated Chats" if new_chat_per_prompt else "Single Multi-Turn Thread (Continuous Style & Memory)"
+    console.print(f"[bold cyan]Enqueued {len(prompt_items)} prompt(s)[/bold cyan] in [bold green]{mode_desc}[/bold green] into: [bold yellow]{output_dir}[/bold yellow]\n")
 
     batch_name = os.path.splitext(os.path.basename(prompts_file))[0] if prompts_file else "single_prompt"
 
@@ -155,6 +157,7 @@ def run(
         rate_limit=rate_limit,
         concurrency=concurrency,
         timeout_s=timeout,
+        new_chat_per_prompt=new_chat_per_prompt,
         port=port,
     ))
 
@@ -166,6 +169,7 @@ async def _execute_batch(
     rate_limit: float,
     concurrency: int,
     timeout_s: int,
+    new_chat_per_prompt: bool,
     port: int,
 ):
     orchestrator = Orchestrator(
@@ -175,7 +179,7 @@ async def _execute_batch(
         rate_limit_rpm=rate_limit,
         concurrency=concurrency,
         timeout_ms=timeout_s * 1000,
-        reset_chat_between_prompts=True,
+        reset_chat_between_prompts=new_chat_per_prompt,
     )
 
     job_start_times = {}

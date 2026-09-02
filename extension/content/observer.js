@@ -1,5 +1,6 @@
 /**
- * MutationObserver for tracking Gemini generation state and image extraction.
+ * MutationObserver for tracking Gemini generation state and image extraction
+ * with Turn-Scoped isolation for multi-turn conversational consistency.
  */
 
 import { SELECTOR_MAP, findFirstMatchingSelector } from './selectors.js';
@@ -27,17 +28,17 @@ export function watchForImageGeneration({
   const processedImages = new Set();
   let imageCount = 0;
 
-  // Track existing images before prompt was submitted so we only capture NEW images
-  const initialImages = new Set(
-    Array.from(document.querySelectorAll('img')).map((img) => img.src)
+  // Snapshot existing images in DOM before this turn's prompt execution
+  const existingImages = new Set(
+    Array.from(document.querySelectorAll('img')).map((img) => img.src || img.currentSrc)
   );
 
-  onStatus?.("GENERATING", "Monitoring DOM for generated images...");
+  onStatus?.("GENERATING", "Monitoring latest conversation turn for generated image...");
 
   const observer = new MutationObserver(async (mutations) => {
     if (isDone) return;
 
-    // Check for safety blocked warnings
+    // 1. Check for safety blocked warnings
     const safetyEl = findFirstMatchingSelector(SELECTOR_MAP.safetyWarning);
     if (safetyEl && safetyEl.offsetParent !== null) {
       cleanup();
@@ -45,24 +46,37 @@ export function watchForImageGeneration({
       return;
     }
 
-    // Check for new img elements
+    // 2. Identify all current images in DOM
     const currentImgs = Array.from(document.querySelectorAll('img'));
-    for (const img of currentImgs) {
-      const src = img.src;
+    
+    // Find newly appended images that were NOT in the DOM prior to this prompt
+    const candidateImgs = currentImgs.filter((img) => {
+      const src = img.src || img.currentSrc;
+      if (!src || src.startsWith("data:image/svg") || src.includes("avatar")) {
+        return false;
+      }
+      return !existingImages.has(src) && !processedImages.has(src);
+    });
+
+    for (const img of candidateImgs) {
+      const src = img.src || img.currentSrc;
       if (!src) continue;
 
-      // Filter: Must be a newly rendered image not present before prompt submission
-      if (initialImages.has(src) || processedImages.has(src)) {
-        continue;
-      }
-
-      // Check if matches Gemini image heuristics (googleusercontent or blob URL)
+      // Validate that it is a genuine Gemini generated image asset
       const isGeminiImg =
         src.includes("googleusercontent.com") ||
+        src.includes("ggpht.com") ||
         src.startsWith("blob:") ||
-        (img.alt && img.alt.toLowerCase().includes("generated"));
+        src.startsWith("data:image") ||
+        (img.alt && img.alt.toLowerCase().includes("generated")) ||
+        (img.dataset && img.dataset.testId === "generated-image");
 
-      if (isGeminiImg) {
+      // Filter out tiny icons / avatars
+      const width = img.naturalWidth || img.width || 0;
+      const height = img.naturalHeight || img.height || 0;
+      const isTooSmall = (width > 0 && width < 150) || (height > 0 && height < 150);
+
+      if (isGeminiImg && !isTooSmall) {
         processedImages.add(src);
         imageCount++;
         onStatus?.("RENDERING", `Extracting image ${imageCount}...`);
@@ -80,22 +94,19 @@ export function watchForImageGeneration({
               source_url: src.startsWith("blob:") ? undefined : src
             }
           });
+
+          // Once we have extracted the newly generated image, finalize this turn cleanly
+          setTimeout(() => {
+            if (!isDone) {
+              cleanup();
+              onStatus?.("DONE", `Completed generation for prompt.`);
+            }
+          }, 1000);
+
         } catch (err) {
           console.error("[ImageGenPiper Observer] Image fetch error:", err);
         }
       }
-    }
-
-    // Check if generation completed (spinner gone and at least 1 image found)
-    const isSpinnerActive = !!findFirstMatchingSelector(SELECTOR_MAP.generatingIndicator);
-    if (!isSpinnerActive && imageCount > 0) {
-      // Delay slightly in case multi-image rendering completes
-      setTimeout(() => {
-        if (!isDone) {
-          cleanup();
-          onStatus?.("DONE", `Completed generation with ${imageCount} image(s).`);
-        }
-      }, 1500);
     }
   });
 

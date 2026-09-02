@@ -61,6 +61,15 @@ export const SELECTOR_MAP = {
     'button:has(mat-icon[fonticon*="add" i])'
   ],
 
+  responseTurn: [
+    'model-response',
+    '[data-test-id="conversation-turn"]:has(model-response)',
+    '[data-test-id="conversation-turn"]',
+    'response-container',
+    'div[role="listitem"]',
+    'main article'
+  ],
+
   conversationContainer: [
     '[data-test-id="conversation-turn"]',
     '[data-test-id="chat-history"]',
