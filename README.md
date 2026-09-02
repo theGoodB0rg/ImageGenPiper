@@ -6,18 +6,30 @@ ImageGenPiper bridges a local Python asynchronous orchestrator with a Chrome Man
 
 ---
 
-## 🖼️ Live Visual Proof & Story Continuity Showcase
+## 📖 Live Comic Showcase: *"The Scavenger's Cache"* (Full 10-Part Arc)
 
-ImageGenPiper maintains conversational context across sequential prompts in a single Gemini thread, preserving **character appearance**, **line weight**, **color grading**, and **environmental tone** across entire graphic narrative arcs.
+Below is the complete 10-panel survival story generated sequentially in a single persistent Gemini chat thread. Notice the consistent character features (the boy's tattered gray-blue tunic, messy hair, iron spear), color grading, and comic art style preserved across all 10 turns:
 
-### Multi-Panel Story Series: *"The Scavenger's Cache"* (10-Part Narrative Arc)
+| **Panel 01: The Canyon Descent** | **Panel 02: The Sunken Vault** |
+| :---: | :---: |
+| <img src="assets/comic_panel_01.jpg" width="100%" alt="Panel 01: The Canyon Descent" /> | <img src="assets/comic_panel_02.jpg" width="100%" alt="Panel 02: The Sunken Vault" /> |
+| *Rappelling down the crumbling rock face into the mist* | *Discovering the half-buried iron blast door* |
+| **Panel 03: The Broken Seal** | **Panel 04: The Forgotten Cache** |
+| <img src="assets/comic_panel_03.jpg" width="100%" alt="Panel 03: The Broken Seal" /> | <img src="assets/comic_panel_04.jpg" width="100%" alt="Panel 04: The Forgotten Cache" /> |
+| *Prying open the rusted hatch with the spear tip* | *Recovering ancient survival provisions inside the vault* |
+| **Panel 05: The Distant Dust Plume** | **Panel 06: Setting the Snare** |
+| <img src="assets/comic_panel_05.jpg" width="100%" alt="Panel 05: The Distant Dust Plume" /> | <img src="assets/comic_panel_06.jpg" width="100%" alt="Panel 06: Setting the Snare" /> |
+| *Spotting the 3-guard tracker patrol through observation slit* | *Rigging a tactical tripwire counterweight trap* |
+| **Panel 07: The Ambush** | **Panel 08: The Smoke Screen** |
+| <img src="assets/comic_panel_07.jpg" width="100%" alt="Panel 07: The Ambush" /> | <img src="assets/comic_panel_08.jpg" width="100%" alt="Panel 08: The Smoke Screen" /> |
+| *Counterweight drops as boy strikes from the shadow flank* | *Igniting packing straw into blinding smoke and sparks* |
+| **Panel 09: The Drainage Escape** | **Panel 10: The Salt Flat Crossing** |
+| <img src="assets/comic_panel_09.jpg" width="100%" alt="Panel 09: The Drainage Escape" /> | <img src="assets/comic_panel_10.jpg" width="100%" alt="Panel 10: The Salt Flat Crossing" /> |
+| *Squeezing out through the drainage culvert with provisions* | *Twilight falls across the salt flat toward distant megaliths* |
 
-| Panel 01: The Canyon Descent | Panel 07: The Ambush | Panel 10: The Salt Flat Crossing |
-| :---: | :---: | :---: |
-| ![Panel 01](assets/scavenger_01_descent.jpg) | ![Panel 07](assets/scavenger_07_ambush.jpg) | ![Panel 10](assets/scavenger_10_saltflat.jpg) |
-| *Rappelling into the mist with spear* | *Tactical tripwire blind-spot strike* | *Resolute crossing under double moon* |
+---
 
-### Hero Single-Prompt Generation
+## 🎨 Hero Single-Prompt Generation
 
 ![Crystal Dragon Sample Output](assets/sample_crystal_dragon.jpg)
 
