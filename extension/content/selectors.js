@@ -51,6 +51,16 @@ export const SELECTOR_MAP = {
     'form button:last-of-type'
   ],
 
+  newChatButton: [
+    'a[aria-label*="New chat" i]',
+    'button[aria-label*="New chat" i]',
+    'a[data-test-id="new-chat-button"]',
+    'button[data-test-id="new-chat-button"]',
+    'a[href="/app"]',
+    'a:has(mat-icon[fonticon*="add" i])',
+    'button:has(mat-icon[fonticon*="add" i])'
+  ],
+
   conversationContainer: [
     '[data-test-id="conversation-turn"]',
     '[data-test-id="chat-history"]',

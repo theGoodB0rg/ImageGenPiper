@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.downloader import DownloadManager
@@ -37,6 +38,7 @@ class Orchestrator:
         concurrency: int = 1,
         max_retries: int = 3,
         timeout_ms: int = 120000,
+        reset_chat_between_prompts: bool = True,
     ):
         self.ws_server = WebSocketBridgeServer(host=ws_host, port=ws_port)
         self.job_queue = JobQueue(max_retries=max_retries)
@@ -48,6 +50,7 @@ class Orchestrator:
         self.downloader = DownloadManager(output_dir=output_dir)
         self.concurrency = max(1, concurrency)
         self.timeout_ms = timeout_ms
+        self.reset_chat_between_prompts = reset_chat_between_prompts
 
         self._active_futures: Dict[str, asyncio.Future] = {}
         self._status_callbacks: List[StatusCallback] = []
@@ -85,9 +88,15 @@ class Orchestrator:
         """Enqueue a prompt job."""
         await self.job_queue.enqueue(job)
 
-    async def run_batch(self, timeout: Optional[float] = None) -> Dict[str, List[Job]]:
+    async def run_batch(
+        self,
+        batch_id: str = "batch",
+        timeout: Optional[float] = None,
+        total_elapsed_s: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
-        Run the batch until all enqueued jobs are completed or permanently failed.
+        Run the batch until all enqueued jobs are completed or permanently failed,
+        and generate a single consolidated metadata.json manifest.
         """
         if not self._is_running:
             await self.start()
@@ -113,9 +122,17 @@ class Orchestrator:
                 w.cancel()
             self._worker_tasks.clear()
 
+        # Write unified batch manifest
+        manifest_path = await self.downloader.write_batch_manifest(
+            batch_id=batch_id,
+            total_elapsed_s=total_elapsed_s,
+            total_prompts=self.job_queue.total_count,
+        )
+
         return {
             "completed": list(self.job_queue._completed.values()),
             "failed": list(self.job_queue._failed.values()),
+            "manifest_path": manifest_path,
         }
 
     async def _wait_for_completion(self) -> None:
@@ -129,7 +146,6 @@ class Orchestrator:
         """Worker task processing jobs from the queue."""
         while self._is_running:
             try:
-                # Check if everything is done
                 if self.job_queue.pending_count == 0 and self.job_queue.running_count == 0:
                     await asyncio.sleep(0.2)
                     continue
@@ -155,16 +171,19 @@ class Orchestrator:
                 req = GenerateRequest(
                     id=job.id,
                     prompt=job.prompt,
+                    sequence_index=job.sequence_index,
+                    title=job.title,
+                    reset_chat=self.reset_chat_between_prompts,
                     timeout_ms=job.timeout_ms or self.timeout_ms,
                     options=job.options,
                 )
 
-                self._notify_status(job.id, "DISPATCHING", "Sending prompt to Chrome Extension...")
+                self._notify_status(job.id, "DISPATCHING", f"Sending prompt #{job.sequence_index or 1} to Chrome...")
                 sent = await self.ws_server.broadcast(req)
                 if sent == 0:
                     raise RuntimeError("No connected extension clients available to process request.")
 
-                # 3. Await completion future (populated by WS message handler)
+                # 3. Await completion future
                 timeout_s = (job.timeout_ms or self.timeout_ms) / 1000.0 + 10.0
                 await asyncio.wait_for(fut, timeout=timeout_s)
 
@@ -195,17 +214,23 @@ class Orchestrator:
             self._notify_status(msg.id, msg.status.value, msg.message)
 
         elif isinstance(msg, ImageFound):
-            # Save image to disk asynchronously
+            job = self.job_queue.get_job(msg.id)
+            prompt_text = job.prompt if job else "generated"
+            seq_idx = job.sequence_index if job else None
+            title_text = job.title if job else None
+
+            # Save image to disk asynchronously with ordered naming
             saved_path, is_duplicate = await self.downloader.save_image(
                 job_id=msg.id,
-                prompt=self.job_queue.get_job(msg.id).prompt if self.job_queue.get_job(msg.id) else "generated",
+                prompt=prompt_text,
                 image_index=msg.image_index,
                 mime_type=msg.mime_type,
                 data_base64=msg.data_base64,
+                sequence_index=seq_idx,
+                title=title_text,
                 metadata=msg.metadata,
             )
 
-            job = self.job_queue.get_job(msg.id)
             if job:
                 job.result_paths.append(saved_path)
 

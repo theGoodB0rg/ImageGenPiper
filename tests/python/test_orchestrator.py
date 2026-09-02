@@ -63,7 +63,7 @@ async def test_orchestrator_single_job_success(temp_output_dir):
 
     client_task = asyncio.create_task(mock_extension_client())
 
-    job = Job(id="job-orch-1", prompt="Orchestrator test prompt")
+    job = Job(id="job-orch-1", prompt="Orchestrator test prompt", sequence_index=1, title="Test Scene")
     await orch.add_job(job)
 
     # Process batch with 1 worker
@@ -77,3 +77,5 @@ async def test_orchestrator_single_job_success(temp_output_dir):
     assert job.status == JobStatus.COMPLETED
     assert len(job.result_paths) == 1
     assert os.path.exists(job.result_paths[0])
+    assert "manifest_path" in results
+    assert os.path.exists(results["manifest_path"])

@@ -2,9 +2,11 @@
 
 import asyncio
 import os
+import re
 import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
-from typing import Optional
 import typer
 from rich.console import Console
 
@@ -21,6 +23,55 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console(safe_box=True)
+
+
+def parse_prompt_file(filepath: str) -> List[Dict[str, Any]]:
+    """
+    Parse a prompt file supporting comment titles and sequential indexing.
+    Example:
+      # Image 1: The Attrition
+      Detailed stickman... Scene: A harsh daytime death march...
+    """
+    items = []
+    current_title = None
+    sequence = 1
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+
+            if line_clean.startswith("#"):
+                # Check for titled comments like "# Image 1: The Attrition" or "# The Attrition"
+                comment_text = line_clean.lstrip("#").strip()
+                title_match = re.search(r"(?:image\s*\d+\s*:\s*)?(.+)", comment_text, re.IGNORECASE)
+                if title_match:
+                    candidate = title_match.group(1).strip()
+                    # Ignore generic section headers like "Style: ..."
+                    if not candidate.lower().startswith("style:") and not candidate.lower().startswith("the story:"):
+                        current_title = candidate
+                continue
+
+            # Non-comment line = Prompt
+            # Extract scene title if not found from comment
+            title = current_title
+            if not title:
+                scene_match = re.search(r"scene\s*:\s*([^.]+)", line_clean, re.IGNORECASE)
+                if scene_match:
+                    title = scene_match.group(1).strip()
+                else:
+                    title = f"Scene {sequence}"
+
+            items.append({
+                "sequence_index": sequence,
+                "title": title,
+                "prompt": line_clean,
+            })
+            sequence += 1
+            current_title = None
+
+    return items
 
 
 @app.command()
@@ -74,28 +125,32 @@ def run(
         console.print("[bold red]Error:[/bold red] You must provide either --prompt or --prompts-file.")
         raise typer.Exit(code=1)
 
-    prompts = []
+    prompt_items: List[Dict[str, Any]] = []
+
     if prompt:
-        prompts.append(prompt.strip())
+        prompt_items.append({
+            "sequence_index": 1,
+            "title": "Single Generation",
+            "prompt": prompt.strip(),
+        })
 
     if prompts_file:
         if not os.path.exists(prompts_file):
             console.print(f"[bold red]Error:[/bold red] Prompts file not found: {prompts_file}")
             raise typer.Exit(code=1)
-        with open(prompts_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line_clean = line.strip()
-                if line_clean and not line_clean.startswith("#"):
-                    prompts.append(line_clean)
+        prompt_items = parse_prompt_file(prompts_file)
 
-    if not prompts:
+    if not prompt_items:
         console.print("[bold red]Error:[/bold red] No valid prompts found to process.")
         raise typer.Exit(code=1)
 
-    console.print(f"[bold cyan]Enqueued {len(prompts)} prompt(s)[/bold cyan] to generate into: [bold yellow]{output_dir}[/bold yellow]\n")
+    console.print(f"[bold cyan]Enqueued {len(prompt_items)} prompt(s)[/bold cyan] to generate into: [bold yellow]{output_dir}[/bold yellow]\n")
+
+    batch_name = os.path.splitext(os.path.basename(prompts_file))[0] if prompts_file else "single_prompt"
 
     asyncio.run(_execute_batch(
-        prompts=prompts,
+        batch_id=batch_name,
+        prompt_items=prompt_items,
         output_dir=output_dir,
         rate_limit=rate_limit,
         concurrency=concurrency,
@@ -105,7 +160,8 @@ def run(
 
 
 async def _execute_batch(
-    prompts: list[str],
+    batch_id: str,
+    prompt_items: List[Dict[str, Any]],
     output_dir: str,
     rate_limit: float,
     concurrency: int,
@@ -119,34 +175,61 @@ async def _execute_batch(
         rate_limit_rpm=rate_limit,
         concurrency=concurrency,
         timeout_ms=timeout_s * 1000,
+        reset_chat_between_prompts=True,
     )
+
+    job_start_times = {}
 
     # Attach live status logger
     def on_status(job_id: str, status: str, message: Optional[str]):
         msg_str = f" - {message}" if message else ""
         color = "cyan"
+        now = time.time()
+
+        if status == "DISPATCHING":
+            job_start_times[job_id] = now
+
         if status in ("IMAGE_SAVED", "COMPLETED"):
             color = "green"
+            start_t = job_start_times.get(job_id)
+            if start_t:
+                elapsed = now - start_t
+                msg_str += f" [dim](elapsed: {elapsed:.1f}s)[/dim]"
         elif status in ("ERROR", "FAILED"):
             color = "red"
         elif status == "WAITING_FOR_EXTENSION":
             color = "yellow"
+
         console.print(f"[{color}][{status}][/{color}] [dim]Job {job_id[:8]}:[/dim]{msg_str}")
 
     orchestrator.on_status_update(on_status)
 
-    for p in prompts:
+    for item in prompt_items:
         job = Job(
             id=str(uuid.uuid4()),
-            prompt=p,
+            prompt=item["prompt"],
+            sequence_index=item.get("sequence_index"),
+            title=item.get("title"),
             timeout_ms=timeout_s * 1000,
         )
         await orchestrator.add_job(job)
 
+    batch_start = time.time()
     try:
         await orchestrator.start()
-        results = await orchestrator.run_batch()
-        print_summary(results["completed"], results["failed"], output_dir)
+        results = await orchestrator.run_batch(
+            batch_id=batch_id,
+            total_elapsed_s=0.0,
+        )
+        total_elapsed = time.time() - batch_start
+        # Rewrite manifest with final exact elapsed time
+        await orchestrator.downloader.write_batch_manifest(
+            batch_id=batch_id,
+            total_elapsed_s=total_elapsed,
+            total_prompts=len(prompt_items),
+        )
+        print_summary(results["completed"], results["failed"], output_dir, total_elapsed_s=total_elapsed)
+        console.print(f"[bold cyan]Unified Manifest generated:[/bold cyan] [underline]{results['manifest_path']}[/underline]\n")
     finally:
         await orchestrator.stop()
 

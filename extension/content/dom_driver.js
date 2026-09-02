@@ -4,6 +4,35 @@
 
 import { SELECTOR_MAP, findFirstMatchingSelector } from './selectors.js';
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resets Gemini SPA to a clean New Chat session to isolate prompts and DOM.
+ * @returns {Promise<boolean>}
+ */
+export async function resetToNewChat() {
+  const newChatBtn = findFirstMatchingSelector(SELECTOR_MAP.newChatButton);
+  if (newChatBtn) {
+    try {
+      newChatBtn.focus();
+      newChatBtn.click();
+      await delay(1200);
+      return true;
+    } catch (e) {
+      console.warn("[ImageGenPiper DOM] Error clicking New Chat button:", e);
+    }
+  }
+
+  // Fallback: If URL has a specific chat ID, navigate to base /app
+  if (window.location.pathname !== '/app' && window.location.hostname.includes('gemini.google.com')) {
+    window.location.href = 'https://gemini.google.com/app';
+    await delay(2000);
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Simulates human typing and triggers React/Angular synthetic input events.
  * @param {HTMLElement} element - Input element (textarea or contenteditable div)
@@ -47,7 +76,7 @@ export async function simulateTyping(element, text) {
   element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
 
   // Short delay to let frameworks react
-  await new Promise((r) => setTimeout(r, 100));
+  await delay(150);
 }
 
 /**

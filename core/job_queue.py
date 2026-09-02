@@ -26,6 +26,8 @@ class PriorityItem:
 class Job:
     id: str
     prompt: str
+    sequence_index: Optional[int] = None
+    title: Optional[str] = None
     priority: int = 0
     timeout_ms: int = 120000
     options: Dict[str, Any] = field(default_factory=dict)

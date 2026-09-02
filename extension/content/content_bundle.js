@@ -13,45 +13,68 @@
 
 const SELECTOR_MAP = {
   textarea: [
+    // Rich Textarea / ContentEditable
+    'rich-textarea [contenteditable="true"]',
+    'rich-textarea [role="textbox"]',
+    'div[contenteditable="true"][role="textbox"]',
+    'div[contenteditable="true"]',
+    
     // Explicit Test IDs and Roles
     '[data-test-id="input-textarea"]',
     '[data-test-id="prompt-textarea"]',
-    'rich-textarea [role="textbox"]',
-    '[role="textbox"][contenteditable="true"]',
+    '[role="textbox"]',
     
     // Semantic ARIA & Placeholders
     'textarea[placeholder*="Ask" i]',
     'textarea[placeholder*="prompt" i]',
     'textarea[aria-label*="prompt" i]',
     'textarea[aria-label*="Ask" i]',
+    'textarea[aria-label*="Enter" i]',
     'div[data-placeholder*="Ask" i]',
     
-    // Structural Heuristics
+    // Structural Fallbacks
     'form textarea',
     'main footer textarea',
     'div[role="presentation"] textarea',
-    'textarea'
+    'textarea',
+    'input[type="text"]'
   ],
 
   submitButton: [
-    // Test IDs and ARIA labels
-    'button[data-test-id="send-button"]',
+    // ARIA & Test IDs
     'button[aria-label*="Send" i]',
     'button[aria-label*="Submit" i]',
-    'button[aria-label*="generate" i]',
+    'button[aria-label*="Generate" i]',
+    'button[data-test-id="send-button"]',
     
-    // SVG Icon Heuristics
+    // Icon / Visual buttons inside input area
+    'rich-textarea ~ button',
+    '.input-area button:has(mat-icon)',
+    '.input-area button:has(svg)',
     'button:has(svg[path*="send" i])',
     'button:has(svg[class*="send" i])',
+    'button:has(mat-icon[fonticon*="send" i])',
     
     // Structural Fallback
     'form button[type="submit"]',
     'form button:last-of-type'
   ],
 
+  newChatButton: [
+    'a[aria-label*="New chat" i]',
+    'button[aria-label*="New chat" i]',
+    'a[data-test-id="new-chat-button"]',
+    'button[data-test-id="new-chat-button"]',
+    'a[href="/app"]',
+    'a:has(mat-icon[fonticon*="add" i])',
+    'button:has(mat-icon[fonticon*="add" i])'
+  ],
+
   conversationContainer: [
     '[data-test-id="conversation-turn"]',
     '[data-test-id="chat-history"]',
+    'model-response',
+    'response-container',
     '[role="list"]',
     'main [role="log"]',
     'main article',
@@ -60,15 +83,20 @@ const SELECTOR_MAP = {
 
   imageElement: [
     'img[src*="googleusercontent.com"]',
+    'img[src*="ggpht.com"]',
     'img[src^="blob:"]',
+    'img[src^="data:image"]',
     'img[alt*="generated" i]',
-    'img[data-test-id="generated-image"]'
+    'img[alt*="image" i]',
+    'img[data-test-id="generated-image"]',
+    'img'
   ],
 
   generatingIndicator: [
     '[data-test-id="loading"]',
     'svg[class*="spinner"]',
-    'button[aria-label*="Stop" i]', // "Stop generating" button
+    'mat-progress-spinner',
+    'button[aria-label*="Stop" i]',
     '[aria-busy="true"]'
   ],
 
@@ -100,7 +128,7 @@ function findFirstMatchingSelector(selectorList, queryFn = null) {
         return el;
       }
     } catch (e) {
-      // Ignore invalid or unsupported pseudo-selectors on old browsers
+      // Ignore invalid or unsupported pseudo-selectors on old engines
     }
   }
 
@@ -189,6 +217,35 @@ async function fetchImageBlobAsBase64(url) {
 
 
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resets Gemini SPA to a clean New Chat session to isolate prompts and DOM.
+ * @returns {Promise<boolean>}
+ */
+async function resetToNewChat() {
+  const newChatBtn = findFirstMatchingSelector(SELECTOR_MAP.newChatButton);
+  if (newChatBtn) {
+    try {
+      newChatBtn.focus();
+      newChatBtn.click();
+      await delay(1200);
+      return true;
+    } catch (e) {
+      console.warn("[ImageGenPiper DOM] Error clicking New Chat button:", e);
+    }
+  }
+
+  // Fallback: If URL has a specific chat ID, navigate to base /app
+  if (window.location.pathname !== '/app' && window.location.hostname.includes('gemini.google.com')) {
+    window.location.href = 'https://gemini.google.com/app';
+    await delay(2000);
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Simulates human typing and triggers React/Angular synthetic input events.
  * @param {HTMLElement} element - Input element (textarea or contenteditable div)
@@ -232,7 +289,7 @@ async function simulateTyping(element, text) {
   element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
 
   // Short delay to let frameworks react
-  await new Promise((r) => setTimeout(r, 100));
+  await delay(150);
 }
 
 /**
@@ -428,14 +485,26 @@ function sendToBridge(payload) {
 }
 
 async function handleGenerateRequest(message) {
-  const { id, prompt, timeout_ms = 120000 } = message;
-  console.log(`[ImageGenPiper Content] Processing prompt [${id}]: "${prompt}"`);
+  const { id, prompt, reset_chat = true, sequence_index, title, timeout_ms = 120000 } = message;
+  console.log(`[ImageGenPiper Content] Processing prompt [${id}] #${sequence_index || 1} "${title || ''}": "${prompt}"`);
 
   if (activeCancelFn) {
     activeCancelFn();
     activeCancelFn = null;
   }
 
+  // 1. Reset to New Chat if requested (Clean DOM isolation)
+  if (reset_chat) {
+    sendToBridge({
+      type: "STATUS_UPDATE",
+      id,
+      status: "RESETTING_CHAT",
+      message: "Opening fresh chat session for isolated generation..."
+    });
+    await resetToNewChat();
+  }
+
+  // 2. Locate input textarea
   sendToBridge({
     type: "STATUS_UPDATE",
     id,
@@ -443,7 +512,13 @@ async function handleGenerateRequest(message) {
     message: "Locating input field and typing prompt..."
   });
 
-  const textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
+  let textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
+  if (!textarea) {
+    // Retry once after brief wait in case SPA is rendering
+    await new Promise((r) => setTimeout(r, 1000));
+    textarea = findFirstMatchingSelector(SELECTOR_MAP.textarea);
+  }
+
   if (!textarea) {
     console.error("[ImageGenPiper Content] Could not locate prompt textarea in DOM.");
     sendToBridge({
@@ -457,12 +532,14 @@ async function handleGenerateRequest(message) {
   }
 
   try {
+    // 3. Type prompt and submit
     await simulateTyping(textarea, prompt);
     const submitted = await clickSubmitButton();
     if (!submitted) {
       throw new Error("Failed to submit prompt (Send button not found).");
     }
 
+    // 4. Watch for generated image
     activeCancelFn = watchForImageGeneration({
       id,
       timeoutMs: timeout_ms,

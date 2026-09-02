@@ -1,6 +1,7 @@
 """Terminal User Interface components using Rich for ImageGenPiper."""
 
 from datetime import datetime
+import time
 from typing import List, Optional
 from rich.console import Console
 from rich.panel import Panel
@@ -8,7 +9,6 @@ from rich.table import Table
 from rich.text import Text
 from core.job_queue import Job
 
-# Force utf-8 safe rendering
 console = Console(safe_box=True)
 
 
@@ -45,24 +45,43 @@ def print_status_table(
         console.print(f"[dim italic]Latest: {latest_event}[/dim italic]\n")
 
 
-def print_summary(completed: List[Job], failed: List[Job], output_dir: str):
-    """Render completion summary."""
+def print_summary(
+    completed: List[Job],
+    failed: List[Job],
+    output_dir: str,
+    total_elapsed_s: Optional[float] = None,
+):
+    """Render completion summary with timing and throughput benchmarks."""
     console.print("\n")
     if failed:
         title = f"[yellow]Batch Finished with {len(failed)} Failure(s)[/yellow]"
     else:
         title = f"[bold green]Batch Generation Completed Successfully![/bold green]"
 
-    summary_table = Table(title="Execution Summary", border_style="green")
+    summary_table = Table(title="Execution & Benchmark Summary", border_style="green")
     summary_table.add_column("Metric", style="bold white")
     summary_table.add_column("Value", style="bold yellow")
 
     total_images = sum(len(j.result_paths) for j in completed)
-    summary_table.add_row("Total Prompts Processed", str(len(completed) + len(failed)))
+    total_prompts = len(completed) + len(failed)
+
+    summary_table.add_row("Total Prompts Processed", str(total_prompts))
     summary_table.add_row("Successful Prompts", str(len(completed)))
     summary_table.add_row("Failed Prompts", str(len(failed)))
     summary_table.add_row("Images Downloaded", str(total_images))
     summary_table.add_row("Output Directory", output_dir)
+
+    if total_elapsed_s is not None and total_elapsed_s > 0:
+        mins = int(total_elapsed_s // 60)
+        secs = total_elapsed_s % 60
+        time_str = f"{mins}m {secs:.1f}s" if mins > 0 else f"{secs:.1f}s"
+        summary_table.add_row("Total Elapsed Time", time_str)
+
+        if total_images > 0:
+            avg_per_img = total_elapsed_s / total_images
+            ipm = (total_images / total_elapsed_s) * 60.0
+            summary_table.add_row("Avg Time Per Image", f"{avg_per_img:.1f}s")
+            summary_table.add_row("Throughput (IPM)", f"{ipm:.2f} images/min")
 
     console.print(Panel(summary_table, title=title, border_style="green"))
 

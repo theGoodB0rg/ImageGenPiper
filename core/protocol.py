@@ -27,6 +27,7 @@ class ErrorCode(str, Enum):
 
 class GenerationStatus(str, Enum):
     QUEUED = "QUEUED"
+    RESETTING_CHAT = "RESETTING_CHAT"
     TYPING = "TYPING"
     GENERATING = "GENERATING"
     RENDERING = "RENDERING"
@@ -42,6 +43,9 @@ class GenerateRequest(BaseMessage):
     type: MessageType = MessageType.GENERATE_REQUEST
     id: str
     prompt: str
+    sequence_index: Optional[int] = None
+    title: Optional[str] = None
+    reset_chat: bool = True
     timeout_ms: int = 120000
     options: Dict[str, Any] = Field(default_factory=dict)
 

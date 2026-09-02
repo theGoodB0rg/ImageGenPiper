@@ -19,9 +19,13 @@ def test_sanitize_slug():
     assert slug == "a-futuristic-cyberpunk-city-8k-render-ar-16-9"
     assert len(sanitize_slug("a" * 100, max_length=20)) == 20
 
+    # Scene extraction test
+    slug2 = sanitize_slug("Detailed comic style. Scene: The Attrition and long march.")
+    assert "the-attrition" in slug2
+
 
 @pytest.mark.asyncio
-async def test_download_manager_save_image(temp_output_dir):
+async def test_download_manager_save_image_and_manifest(temp_output_dir):
     manager = DownloadManager(output_dir=temp_output_dir)
     
     # 1x1 transparent PNG base64
@@ -33,21 +37,32 @@ async def test_download_manager_save_image(temp_output_dir):
         image_index=1,
         mime_type="image/png",
         data_base64=b64_png,
+        sequence_index=1,
+        title="First Pixel",
         metadata={"width": 1, "height": 1}
     )
 
     assert os.path.exists(saved_path)
     assert not is_duplicate
     assert saved_path.endswith(".png")
+    assert "01_first-pixel" in os.path.basename(saved_path)
 
-    # Verify sidecar metadata JSON file was written
-    meta_path = f"{os.path.splitext(saved_path)[0]}.json"
-    assert os.path.exists(meta_path)
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-        assert meta["job_id"] == "test-job-123"
-        assert meta["prompt"] == "A single pixel graphic"
-        assert meta["sha256"] is not None
+    # Write unified manifest
+    manifest_path = await manager.write_batch_manifest(
+        batch_id="test_batch",
+        total_elapsed_s=12.5,
+        total_prompts=1
+    )
+
+    assert os.path.exists(manifest_path)
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+        assert manifest["batch_id"] == "test_batch"
+        assert manifest["total_images_saved"] == 1
+        assert len(manifest["images"]) == 1
+        assert manifest["images"][0]["index"] == 1
+        assert manifest["images"][0]["title"] == "First Pixel"
+        assert manifest["images"][0]["sha256"] is not None
 
 
 @pytest.mark.asyncio
@@ -60,7 +75,8 @@ async def test_download_manager_deduplication(temp_output_dir):
         prompt="Duplicate test",
         image_index=1,
         mime_type="image/png",
-        data_base64=b64_png
+        data_base64=b64_png,
+        sequence_index=1
     )
     assert not is_duplicate1
 
@@ -70,7 +86,8 @@ async def test_download_manager_deduplication(temp_output_dir):
         prompt="Duplicate test 2",
         image_index=1,
         mime_type="image/png",
-        data_base64=b64_png
+        data_base64=b64_png,
+        sequence_index=2
     )
     assert is_duplicate2
     assert saved_path2 == saved_path1
