@@ -2,13 +2,22 @@
 
 > **High-Performance Programmatic CLI & Chrome Extension Bridge for Gemini Web Image Generation**
 
-ImageGenPiper bridges a local Python asynchronous orchestrator with a Chrome Manifest V3 extension, allowing you to bulk generate images on `gemini.google.com` directly using your authenticated browser session—with **zero headless bot-fingerprinting** and **no API rate-limit bottlenecks**.
+ImageGenPiper bridges a local Python asynchronous orchestrator with a Chrome Manifest V3 extension, allowing you to bulk generate images on `gemini.google.com` directly using your authenticated browser session—with **zero headless bot-fingerprinting**, **multi-turn visual character continuity**, and **no API rate-limit bottlenecks**.
 
 ---
 
-## 🖼️ Live Proof & Sample Output
+## 🖼️ Live Visual Proof & Story Continuity Showcase
 
-Generated live via `imagegenpiper run` on `gemini.google.com` using Imagen:
+ImageGenPiper maintains conversational context across sequential prompts in a single Gemini thread, preserving **character appearance**, **line weight**, **color grading**, and **environmental tone** across entire graphic narrative arcs.
+
+### Multi-Panel Story Series: *"The Scavenger's Cache"* (10-Part Narrative Arc)
+
+| Panel 01: The Canyon Descent | Panel 07: The Ambush | Panel 10: The Salt Flat Crossing |
+| :---: | :---: | :---: |
+| ![Panel 01](assets/scavenger_01_descent.jpg) | ![Panel 07](assets/scavenger_07_ambush.jpg) | ![Panel 10](assets/scavenger_10_saltflat.jpg) |
+| *Rappelling into the mist with spear* | *Tactical tripwire blind-spot strike* | *Resolute crossing under double moon* |
+
+### Hero Single-Prompt Generation
 
 ![Crystal Dragon Sample Output](assets/sample_crystal_dragon.jpg)
 
@@ -20,12 +29,13 @@ Generated live via `imagegenpiper run` on `gemini.google.com` using Imagen:
 ## Key Features
 
 - 🛡️ **Zero Bot-Fingerprinting:** Piggybacks directly on your authenticated Chrome session and cookies. No Playwright, Puppeteer, or CDP needed.
+- 🎨 **Multi-Turn Visual Continuity:** Runs batch prompts in a persistent Gemini thread so Imagen retains character features, art style, and color grading across sequential story panels.
 - ⚡ **WebSocket Bridge (Manifest V3):** Fast, persistent JSON-RPC communication between the Python CLI and Chrome with automatic reconnection and heartbeat keepalive.
-- 🎯 **Anti-Fragile DOM Architecture:** Multi-tier fallback selector engine (`SelectorMap`) with synthetic React/Angular event simulation.
-- ⏳ **Smart Rate Limiting & Safety:** Token-bucket rate limiter with randomized human jitter and automated backoff against rate limits.
-- 📥 **Async Image Persistence:** Streams full-resolution images directly to disk with metadata sidecar `.json` files and SHA-256 deduplication.
-- 📊 **Rich Terminal UI:** Live status tables, real-time progress updates, and structured error reporting.
-- 🧪 **100% Test-Driven:** Comprehensive unit, integration, and offline mock fixture test suites.
+- 🎯 **Anti-Fragile DOM Architecture:** Multi-tier fallback selector engine (`SelectorMap`) with synthetic event simulation and turn-scoped isolation.
+- 🔒 **Atomic Deduplication & Persistence:** In-memory hash locking prevents duplicate image writes during rapid rendering.
+- 📁 **Unified Batch Manifest:** Outputs clean sequentially numbered files (`01_title_<id>.jpg`) and a single consolidated `metadata.json` manifest per batch.
+- 📊 **Rich Terminal UI:** Live status tables, real-time progress updates, and benchmark throughput reporting.
+- 🧪 **100% Test-Driven:** Comprehensive unit, integration, and mock test suites (23 Python tests + 7 Extension tests).
 
 ---
 
@@ -67,24 +77,28 @@ imagegenpiper test-bridge
 imagegenpiper run --prompt "A breathtaking crystal dragon perched atop an obsidian mountain at sunset, 8k digital art" --output-dir ./outputs
 ```
 
-### Batch Generation via File
+### Batch Story Generation via File
 
-Create a text file (e.g. `prompts.txt`) with one prompt per line (lines starting with `#` are ignored as comments):
+Create a text file (e.g. `prompts_the_scavengers_cache.txt`) with titles in `#` comments:
 
 ```text
-# Fantasy Landscapes
-A breathtaking crystal dragon perched atop an obsidian mountain at sunset, 8k digital art
-A mystical ancient library carved inside an iceberg, glowing crystals, cinematic lighting
+# The Story: The Scavenger's Cache (10-part Series)
+# Style: Detailed Stickman / Simple Comic Style
 
-# Sci-Fi / Cyberpunk
-A futuristic cyberpunk ramen shop in the pouring rain, neon reflections, ultra-detailed
-A sleek orbital station orbiting Jupiter at twilight, hard sci-fi, photorealistic
+# Image 1: The Canyon Descent
+Detailed stickman and simple comic art style, flat desaturated colors... Scene: A steep canyon wall. The boy rappelling down with guard spear...
+
+# Image 2: The Sunken Vault
+Detailed stickman and simple comic art style, flat desaturated colors... Scene: Discovering the rusted iron blast door...
+
+# Image 3: The Broken Seal
+Detailed stickman and simple comic art style, flat desaturated colors... Scene: Prying open the hatch with the triangular spear tip...
 ```
 
 Run the batch generator:
 
 ```bash
-imagegenpiper run --prompts-file prompts.txt --output-dir ./outputs --rate-limit 6
+imagegenpiper run --prompts-file prompts_the_scavengers_cache.txt --output-dir ./outputs/the_scavengers_cache --rate-limit 6
 ```
 
 ---
@@ -99,36 +113,54 @@ imagegenpiper run --prompts-file prompts.txt --output-dir ./outputs --rate-limit
 | `--rate-limit` | `-r` | `6.0` | Max generation requests per minute (RPM) |
 | `--concurrency` | `-c` | `1` | Number of concurrent worker pipelines |
 | `--timeout` | `-t` | `120` | Timeout in seconds per prompt generation |
+| `--new-chat-per-prompt` | | `False` | Reset to a fresh chat before each prompt (default: False, keeps persistent multi-turn thread) |
 | `--port` | | `8765` | WebSocket bridge port |
 
 ---
 
-## Output Organization & Metadata
+## Output Organization & Unified Manifest
 
-Generated images are automatically organized by date inside the output directory:
+Generated images are automatically saved with sequential index prefixes and descriptive scene slugs:
 
 ```text
-outputs/
+outputs/the_scavengers_cache/
 └── 2026-09-02/
-    ├── a-breathtaking-crystal-dragon-891894be-1.jpg
-    └── a-breathtaking-crystal-dragon-891894be-1.json
+    ├── 01_the-canyon-descent_bbe710f0.jpg
+    ├── 02_the-sunken-vault_768a5483.jpg
+    ├── 03_the-broken-seal_abee6c33.jpg
+    ├── ...
+    ├── 10_the-salt-flat-crossing_0c2b2727.jpg
+    └── metadata.json
 ```
 
-Each image is accompanied by a `.json` metadata sidecar containing the prompt, dimensions, file size, SHA-256 hash, and timestamp:
+The unified `metadata.json` captures complete batch benchmark metrics and image details:
 
 ```json
 {
-  "job_id": "891894be-8cb1-4239-974c-595a94c1241b",
-  "prompt": "A breathtaking crystal dragon perched atop an obsidian mountain at sunset, 8k digital art",
-  "image_index": 1,
-  "mime_type": "image/jpeg",
-  "sha256": "02cc131acee1d66af79bc00dd01d2b7a86536a219f2c46ae4da476842fee775d",
-  "file_size_bytes": 144748,
-  "timestamp": "2026-09-02T11:45:28.785352",
-  "metadata": {
-    "width": 1024,
-    "height": 559
-  }
+  "batch_id": "prompts_the_scavengers_cache",
+  "generated_at": "2026-09-02T12:33:37Z",
+  "total_prompts": 10,
+  "total_images_saved": 10,
+  "benchmark": {
+    "total_elapsed_seconds": 198.24,
+    "avg_seconds_per_image": 19.82,
+    "throughput_ipm": 3.03
+  },
+  "images": [
+    {
+      "index": 1,
+      "title": "The Canyon Descent",
+      "filename": "01_the-canyon-descent_bbe710f0.jpg",
+      "path": "outputs/the_scavengers_cache/2026-09-02/01_the-canyon-descent_bbe710f0.jpg",
+      "prompt": "Detailed stickman... Scene: A steep canyon wall...",
+      "job_id": "bbe710f0-...",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 142610,
+      "sha256": "a69191df8567c0e94501a46df2aa90f68abb256fd39c676741fa24492f1abb55",
+      "dimensions": { "width": 1024, "height": 559 },
+      "timestamp": "2026-09-02T12:30:57Z"
+    }
+  ]
 }
 ```
 
@@ -137,7 +169,7 @@ Each image is accompanied by a `.json` metadata sidecar containing the prompt, d
 ## Troubleshooting & FAQ
 
 #### 1. Why does the Chrome Extension console show `ERR_CONNECTION_REFUSED`?
-This is completely normal when the Python CLI server is not running. The extension will automatically retry connecting with exponential backoff and will connect instantly the moment you run `imagegenpiper run` or `imagegenpiper test-bridge`.
+This is normal when the Python CLI server is not running. The extension will automatically retry connecting with exponential backoff and will connect instantly the moment you start the CLI.
 
 #### 2. The CLI says `Waiting for Chrome extension to connect...`
 Ensure that:
