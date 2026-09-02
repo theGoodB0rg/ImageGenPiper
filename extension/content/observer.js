@@ -1,6 +1,6 @@
 /**
  * MutationObserver for tracking Gemini generation state and image extraction
- * with Turn-Scoped isolation for multi-turn conversational consistency.
+ * with Turn-Scoped isolation and strict intra-turn deduplication.
  */
 
 import { SELECTOR_MAP, findFirstMatchingSelector } from './selectors.js';
@@ -25,7 +25,7 @@ export function watchForImageGeneration({
 }) {
   let isDone = false;
   let timer = null;
-  const processedImages = new Set();
+  const processedUrls = new Set();
   let imageCount = 0;
 
   // Snapshot existing images in DOM before this turn's prompt execution
@@ -46,21 +46,23 @@ export function watchForImageGeneration({
       return;
     }
 
-    // 2. Identify all current images in DOM
+    // 2. Identify candidate images in DOM
     const currentImgs = Array.from(document.querySelectorAll('img'));
     
-    // Find newly appended images that were NOT in the DOM prior to this prompt
+    // Find newly appended images that were NOT in DOM prior to this prompt
     const candidateImgs = currentImgs.filter((img) => {
       const src = img.src || img.currentSrc;
       if (!src || src.startsWith("data:image/svg") || src.includes("avatar")) {
         return false;
       }
-      return !existingImages.has(src) && !processedImages.has(src);
+      return !existingImages.has(src) && !processedUrls.has(src);
     });
 
     for (const img of candidateImgs) {
+      if (isDone) break;
+
       const src = img.src || img.currentSrc;
-      if (!src) continue;
+      if (!src || processedUrls.has(src)) continue;
 
       // Validate that it is a genuine Gemini generated image asset
       const isGeminiImg =
@@ -77,32 +79,32 @@ export function watchForImageGeneration({
       const isTooSmall = (width > 0 && width < 150) || (height > 0 && height < 150);
 
       if (isGeminiImg && !isTooSmall) {
-        processedImages.add(src);
+        // Mark URL as processed immediately to prevent concurrent fetches
+        processedUrls.add(src);
         imageCount++;
         onStatus?.("RENDERING", `Extracting image ${imageCount}...`);
 
         try {
           const { base64, mimeType } = await fetchImageBlobAsBase64(src);
-          onImage?.({
-            id,
-            image_index: imageCount,
-            mime_type: mimeType,
-            data_base64: base64,
-            metadata: {
-              width: img.naturalWidth || img.width || undefined,
-              height: img.naturalHeight || img.height || undefined,
-              source_url: src.startsWith("blob:") ? undefined : src
-            }
-          });
+          
+          if (!isDone) {
+            onImage?.({
+              id,
+              image_index: imageCount,
+              mime_type: mimeType,
+              data_base64: base64,
+              metadata: {
+                width: img.naturalWidth || img.width || undefined,
+                height: img.naturalHeight || img.height || undefined,
+                source_url: src.startsWith("blob:") ? undefined : src
+              }
+            });
 
-          // Once we have extracted the newly generated image, finalize this turn cleanly
-          setTimeout(() => {
-            if (!isDone) {
-              cleanup();
-              onStatus?.("DONE", `Completed generation for prompt.`);
-            }
-          }, 1000);
-
+            // Single image per turn: complete generation immediately
+            cleanup();
+            onStatus?.("DONE", `Completed generation for prompt.`);
+            break;
+          }
         } catch (err) {
           console.error("[ImageGenPiper Observer] Image fetch error:", err);
         }

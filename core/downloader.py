@@ -1,5 +1,6 @@
 """Asynchronous download manager, image persistence, and unified batch manifest generator."""
 
+import asyncio
 import base64
 from datetime import datetime
 import hashlib
@@ -37,6 +38,7 @@ class DownloadManager:
         self.output_dir = os.path.abspath(output_dir)
         self._seen_hashes: Set[str] = set()
         self._hash_to_path: Dict[str, str] = {}
+        self._lock = asyncio.Lock()
         self.saved_records: List[Dict[str, Any]] = []
 
     async def save_image(
@@ -51,7 +53,7 @@ class DownloadManager:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, bool]:
         """
-        Decode Base64 image, check for duplicates via SHA-256, write to disk
+        Decode Base64 image, check for duplicates via SHA-256 atomically, write to disk
         with predictable ordered filenames ({index:02d}_{title_slug}_{short_id}.{ext}).
 
         :returns: (saved_file_path, is_duplicate)
@@ -59,45 +61,50 @@ class DownloadManager:
         image_bytes = base64.b64decode(data_base64)
         sha256_hash = hashlib.sha256(image_bytes).hexdigest()
 
-        # Check deduplication
-        if sha256_hash in self._seen_hashes:
-            existing_path = self._hash_to_path.get(sha256_hash, "")
-            return existing_path, True
+        async with self._lock:
+            # Check deduplication atomically
+            if sha256_hash in self._seen_hashes:
+                existing_path = self._hash_to_path.get(sha256_hash, "")
+                return existing_path, True
 
-        # Determine file extension
-        ext = "png"
-        if "jpeg" in mime_type or "jpg" in mime_type:
-            ext = "jpg"
-        elif "webp" in mime_type:
-            ext = "webp"
+            # Determine file extension
+            ext = "png"
+            if "jpeg" in mime_type or "jpg" in mime_type:
+                ext = "jpg"
+            elif "webp" in mime_type:
+                ext = "webp"
 
-        # Organize by date
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        dest_folder = os.path.join(self.output_dir, date_str)
-        os.makedirs(dest_folder, exist_ok=True)
+            # Organize by date
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            dest_folder = os.path.join(self.output_dir, date_str)
+            os.makedirs(dest_folder, exist_ok=True)
 
-        # Build clean title slug
-        slug = sanitize_slug(title if title else prompt, max_length=40)
-        short_id = job_id.replace("-", "")[:8]
+            # Build clean title slug
+            slug = sanitize_slug(title if title else prompt, max_length=40)
+            short_id = job_id.replace("-", "")[:8]
 
-        # Format with sequential order prefix
-        if sequence_index is not None:
-            prefix = f"{sequence_index:02d}"
-            if image_index > 1:
-                filename = f"{prefix}_{slug}_{short_id}_{image_index}.{ext}"
+            # Format with sequential order prefix
+            if sequence_index is not None:
+                prefix = f"{sequence_index:02d}"
+                if image_index > 1:
+                    filename = f"{prefix}_{slug}_{short_id}_{image_index}.{ext}"
+                else:
+                    filename = f"{prefix}_{slug}_{short_id}.{ext}"
             else:
-                filename = f"{prefix}_{slug}_{short_id}.{ext}"
-        else:
-            filename = f"{slug}_{short_id}_{image_index}.{ext}"
+                filename = f"{slug}_{short_id}_{image_index}.{ext}"
 
-        filepath = os.path.join(dest_folder, filename)
+            filepath = os.path.join(dest_folder, filename)
 
-        # Handle collisions if necessary
-        counter = 1
-        while os.path.exists(filepath):
-            base_name, f_ext = os.path.splitext(filename)
-            filepath = os.path.join(dest_folder, f"{base_name}_{counter}{f_ext}")
-            counter += 1
+            # Handle collisions if necessary
+            counter = 1
+            while os.path.exists(filepath):
+                base_name, f_ext = os.path.splitext(filename)
+                filepath = os.path.join(dest_folder, f"{base_name}_{counter}{f_ext}")
+                counter += 1
+
+            # Reserve hash immediately in seen set before async I/O
+            self._seen_hashes.add(sha256_hash)
+            self._hash_to_path[sha256_hash] = filepath
 
         # Write image bytes asynchronously
         async with aiofiles.open(filepath, "wb") as f:
@@ -121,9 +128,8 @@ class DownloadManager:
             "timestamp": datetime.now().isoformat(),
         }
 
-        self.saved_records.append(record)
-        self._seen_hashes.add(sha256_hash)
-        self._hash_to_path[sha256_hash] = filepath
+        async with self._lock:
+            self.saved_records.append(record)
 
         return filepath, False
 
@@ -140,8 +146,18 @@ class DownloadManager:
         os.makedirs(dest_folder, exist_ok=True)
         manifest_path = os.path.join(dest_folder, "metadata.json")
 
-        # Sort saved records by sequential index
-        sorted_records = sorted(self.saved_records, key=lambda r: r.get("index", 0))
+        async with self._lock:
+            # Deduplicate records by sha256 in manifest
+            unique_records = []
+            seen_in_manifest = set()
+            for r in self.saved_records:
+                h = r.get("sha256")
+                if h not in seen_in_manifest:
+                    seen_in_manifest.add(h)
+                    unique_records.append(r)
+
+            # Sort saved records by sequential index
+            sorted_records = sorted(unique_records, key=lambda r: r.get("index", 0))
 
         benchmark_data = {}
         if total_elapsed_s is not None and total_elapsed_s > 0:
